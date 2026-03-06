@@ -6,7 +6,10 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-**The ultimate CLI companion for Google Summer of Code 2026 contributors.** Stop scrolling through endless web pages and find your perfect organization directly from your terminal.
+> ### ⭐ **If this tool saves you hours of scrolling, please consider dropping a Star on the repo!** > *Your support helps hundreds of other students discover the tool and keeps the project actively maintained. Let's conquer GSoC 2026 together!*
+
+**The ultimate CLI companion for Google Summer of Code 2026 contributors.** Stop getting lost in endless web pages. Find your perfect open-source organization, match your tech stack, and analyze trends—directly from your terminal. Built for developers, by a developer.
+
 
 <img width="730" height="353" alt="image" src="https://github.com/user-attachments/assets/f6801e6c-582f-4309-9a00-3f032ffad72a" />
 
