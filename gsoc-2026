@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""
+GSoC 2026 Explorer - A high-performance CLI tool for Google Summer of Code contributors.
+"""
+import os
+import sys
+import json
+import time
+import requests
+import click
+from typing import List, Dict, Any, Optional
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.prompt import Prompt, Confirm
+
+# --- Constants & Configuration ---
+API_BASE = "https://summerofcode.withgoogle.com/api/program/2026/organizations/"
+CACHE_DIR = os.path.expanduser("~/.gsoc_explorer")
+CACHE_FILE = os.path.join(CACHE_DIR, "orgs_2026.json")
+CACHE_TTL = 86400  # 24 hours
+
+console = Console()
+
+class GSoCDataService:
+    def __init__(self, cache_ttl: int = CACHE_TTL):
+        self.cache_ttl = cache_ttl
+        if not os.path.exists(CACHE_DIR):
+            os.makedirs(CACHE_DIR)
+
+    def fetch_data(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Fetch organizations with smart caching."""
+        if not force_refresh and self._is_cache_valid():
+            try:
+                with open(CACHE_FILE, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+        return self._refresh_cache()
+
+    def _is_cache_valid(self) -> bool:
+        if not os.path.exists(CACHE_FILE):
+            return False
+        return (time.time() - os.path.getmtime(CACHE_FILE)) < self.cache_ttl
+
+    def _refresh_cache(self) -> List[Dict[str, Any]]:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,
+        ) as progress:
+            progress.add_task(description="Syncing GSoC 2026 Organizations...", total=None)
+            try:
+                response = requests.get(API_BASE, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+                with open(CACHE_FILE, 'w') as f:
+                    json.dump(data, f)
+                return data
+            except requests.RequestException as e:
+                console.print(f"[bold red]Sync Failed:[/bold red] {e}")
+                if os.path.exists(CACHE_FILE):
+                    console.print("[yellow]Using stale cache for now...[/yellow]")
+                    with open(CACHE_FILE, 'r') as f:
+                        return json.load(f)
+                sys.exit(1)
+
+service = GSoCDataService()
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option("2.0.0")
+def cli():
+    """🚀 GSoC 2026 Explorer: Find your perfect mentoring organization.
+    
+    A professional-grade CLI tool for contributors to explore, filter, and 
+    analyze GSoC 2026 organizations with ease.
+    """
+    pass
+
+@cli.command()
+@click.option('--force', '-f', is_flag=True, help="Force refresh from the server.")
+def sync(force):
+    """🔄 Sync local database with the latest GSoC data."""
+    service.fetch_data(force_refresh=True)
+    console.print("[bold green]✔ Successfully synced latest GSoC 2026 organizations![/bold green]")
+
+@cli.command(name="list")
+@click.option('--tech', '-t', multiple=True, help='Filter by technology (multiple allowed).')
+@click.option('--cat', '-c', multiple=True, help='Filter by category (multiple allowed).')
+@click.option('--limit', '-l', default=50, help='Limit results shown (default 50).')
+@click.option('--sort', '-s', type=click.Choice(['name', 'tech_count']), default='name', help='Sort order.')
+def list_orgs(tech, cat, limit, sort):
+    """📋 List organizations with advanced multi-filter support."""
+    data = service.fetch_data()
+    
+    # Filtering logic
+    filtered = []
+    tech_set = {t.lower() for t in tech}
+    cat_set = {c.lower() for c in cat}
+
+    for org in data:
+        org_techs = {t.lower() for t in org.get('tech_tags', [])}
+        org_cats = {c.lower() for c in org.get('categories', [])}
+        
+        if tech_set and not tech_set.issubset(org_techs):
+            continue
+        if cat_set and not any(c in org_cats for c in cat_set):
+            continue
+        filtered.append(org)
+
+    # Sorting
+    if sort == 'tech_count':
+        filtered.sort(key=lambda x: len(x.get('tech_tags', [])), reverse=True)
+    else:
+        filtered.sort(key=lambda x: x['name'].lower())
+
+    # Display
+    table = Table(title=f"GSoC 2026: {len(filtered)} Organizations Found", box=None)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Organization Name", style="bold cyan")
+    table.add_column("Primary Tech", style="green")
+    table.add_column("Slug", style="magenta")
+
+    for i, org in enumerate(filtered[:limit]):
+        table.add_row(
+            str(i+1),
+            org['name'],
+            ", ".join(org.get('tech_tags', [])[:3]),
+            org['slug']
+        )
+
+    console.print(table)
+    if len(filtered) > limit:
+        console.print(f"[dim]... and {len(filtered) - limit} more. Use --limit to see more.[/dim]")
+
+@cli.command()
+@click.argument('query')
+def search(query):
+    """🔍 Deep search by name, tagline, or tech."""
+    data = service.fetch_data()
+    query = query.lower()
+    matches = [o for o in data if query in o['name'].lower() or 
+               query in o.get('tagline', '').lower() or
+               any(query in t.lower() for t in o.get('tech_tags', []))]
+
+    if not matches:
+        console.print(f"[bold red]No matches found for '{query}'.[/bold red]")
+        return
+
+    for org in matches:
+        console.print(Panel(
+            f"[bold]{org['name']}[/bold]\n[italic]{org.get('tagline', '')}[/italic]",
+            subtitle=f"[bold magenta]{org['slug']}[/bold magenta]",
+            border_style="cyan"
+        ))
+
+@cli.command()
+@click.argument('slug')
+def info(slug):
+    """ℹ️ Get the complete dossier for an organization."""
+    data = service.fetch_data()
+    org = next((o for o in data if o['slug'].lower() == slug.lower()), None)
+    
+    if not org:
+        console.print(f"[bold red]Error:[/bold red] Slug '{slug}' not found.")
+        return
+
+    # Header
+    console.print("\n")
+    console.print(Panel(
+        f"[bold blue]{org['name'].upper()}[/bold blue]\n[italic white]{org.get('tagline', '')}[/italic white]",
+        title="Organization Dossier", 
+        border_style="blue"
+    ))
+
+    # Links
+    links_table = Table(show_header=False, box=None)
+    links_table.add_row("[bold yellow]🌐 Website:[/bold yellow]", org.get('website_url'))
+    links_table.add_row("[bold yellow]💻 Source:[/bold yellow]", org.get('source_code'))
+    links_table.add_row("[bold yellow]💡 Ideas:[/bold yellow]", f"[link={org.get('ideas_link')}]{org.get('ideas_link')}[/link]")
+    links_table.add_row("[bold yellow]📖 Guidance:[/bold yellow]", org.get('contributor_guidance_url'))
+    console.print(links_table)
+
+    # Tech & Cats
+    console.print(f"\n[bold green]Technologies:[/bold green] {', '.join(org.get('tech_tags', []))}")
+    console.print(f"[bold green]Categories:[/bold green] {', '.join(org.get('categories', []))}")
+
+    # Description
+    console.print("\n[bold cyan underline]Mission Description:[/bold cyan underline]")
+    console.print(Markdown(org.get('description', '') or 'No description provided.'))
+    console.print("\n")
+
+@cli.command()
+def stats():
+    """📊 View participation analytics."""
+    data = service.fetch_data()
+    techs = {}
+    for org in data:
+        for t in org.get('tech_tags', []):
+            techs[t] = techs.get(t, 0) + 1
+    
+    top_techs = sorted(techs.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    table = Table(title="Top 10 Technologies in GSoC 2026", box=None)
+    table.add_column("Technology", style="bold green")
+    table.add_column("Count", style="bold yellow")
+    
+    for tech, count in top_techs:
+        table.add_row(tech, str(count))
+    
+    console.print(table)
+    console.print(f"\n[bold]Total Mentoring Organizations:[/bold] {len(data)}")
+
+if __name__ == '__main__':
+    cli()
