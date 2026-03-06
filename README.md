@@ -3,9 +3,9 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-<img width="730" height="353" alt="image" src="https://github.com/user-attachments/assets/f6801e6c-582f-4309-9a00-3f032ffad72a" />
-
 **The ultimate CLI companion for Google Summer of Code 2026 contributors.** Stop scrolling through endless web pages and find your perfect organization directly from your terminal.
+
+<img width="730" height="353" alt="image" src="https://github.com/user-attachments/assets/f6801e6c-582f-4309-9a00-3f032ffad72a" />
 
 ## ✨ Features
 
