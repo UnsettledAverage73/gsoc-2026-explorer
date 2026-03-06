@@ -1,11 +1,11 @@
-# 🚀 GSoC 2026 Organization Explorer
+<img width="1431" height="756" alt="image" src="https://github.com/user-attachments/assets/598e1d05-ffc0-4878-8161-33d39fc39f28" /># 🚀 GSoC 2026 Organization Explorer
 
 [![GSoC 2026](https://img.shields.io/badge/GSoC-2026-orange.svg)](https://summerofcode.withgoogle.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-![Uploading image.png…]()
+<img width="1431" height="756" alt="image" src="https://github.com/user-attachments/assets/99b1577f-9de5-4c49-9537-a68ec0292a59" />
 
 **The ultimate CLI companion for Google Summer of Code 2026 contributors.** Stop scrolling through endless web pages and find your perfect organization directly from your terminal.
 
