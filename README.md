@@ -20,7 +20,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/gsoc-2026-explorer.git
+git clone https://github.com/UnsettledAverage73/gsoc-2026-explorer.git
 cd gsoc-2026-explorer
 
 # Install dependencies
