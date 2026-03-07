@@ -31,16 +31,25 @@ python3 -m pip install -r requirements.txt
 ./gsoc-2026 list --tech javascript
 ```
 
-### 4. Get detailed info for an organization
+### 4. Advanced Discovery
 ```bash
-./gsoc-2026 info <slug-of-org>
-# Example:
-./gsoc-2026 info openmrs
+# List top technologies
+./gsoc-2026 tags tech
+
+# List top categories
+./gsoc-2026 tags cat
+
+# Open organization ideas in your browser
+./gsoc-2026 open openmrs --ideas
 ```
 
-### 5. Refresh the local cache
+### 5. Data Management
 ```bash
-./gsoc-2026 refresh
+# Export your favorite orgs to CSV for spreadsheet analysis
+./gsoc-2026 export --tech python --tech ai --format csv my_leads.csv
+
+# Refresh the local cache
+./gsoc-2026 sync
 ```
 
 ## Organization Data Source

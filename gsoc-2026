@@ -10,6 +10,8 @@ import requests
 import click
 import subprocess
 import logging
+import webbrowser
+import csv
 from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.table import Table
@@ -123,8 +125,17 @@ class GSoCDataService:
 
 service = GSoCDataService()
 
+def find_org(query: str, data: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Helper to find organization by slug or URL."""
+    org = next((o for o in data if o['slug'].lower() == query.lower()), None)
+    if not org and (query.startswith('http') or 'github.com' in query):
+        q = query.lower()
+        org = next((o for o in data if q in o.get('website_url', '').lower() or 
+                    q in o.get('source_code', '').lower()), None)
+    return org
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.version_option("2.1.0")
+@click.version_option("2.2.0")
 def cli():
     """🚀 GSoC 2026 Explorer: Find your perfect mentoring organization.
     
@@ -242,15 +253,7 @@ def search(query):
 def info(query):
     """ℹ️ Get the complete dossier for an organization by slug or URL."""
     data = service.fetch_data()
-    
-    # Try finding by slug first
-    org = next((o for o in data if o['slug'].lower() == query.lower()), None)
-    
-    # If not found and it looks like a URL, search by website or source code
-    if not org and (query.startswith('http') or 'github.com' in query):
-        q = query.lower()
-        org = next((o for o in data if q in o.get('website_url', '').lower() or 
-                    q in o.get('source_code', '').lower()), None)
+    org = find_org(query, data)
     
     if not org:
         console.print(f"[bold red]Error:[/bold red] Could not find organization for '{query}'.")
@@ -308,13 +311,7 @@ def stats():
 def clone(query, dir):
     """📥 Fast-track contribution: Clone an organization\'s repository."""
     data = service.fetch_data()
-    
-    # Use the same logic as info to find the org
-    org = next((o for o in data if o['slug'].lower() == query.lower()), None)
-    if not org and (query.startswith('http') or 'github.com' in query):
-        q = query.lower()
-        org = next((o for o in data if q in o.get('website_url', '').lower() or 
-                    q in o.get('source_code', '').lower()), None)
+    org = find_org(query, data)
     
     if not org:
         console.print(f"[bold red]Error:[/bold red] Could not find organization for '{query}'.")
@@ -355,6 +352,93 @@ def clone(query, dir):
         console.print(f"[bold red]Clone failed with exit code {e.returncode}.[/bold red]")
     except FileNotFoundError:
         console.print("[bold red]Error:[/bold red] 'git' command not found. Please install git.")
+
+@cli.command()
+@click.argument('type', type=click.Choice(['tech', 'cat']))
+@click.option('--top', '-n', default=20, help='Show top N tags.')
+def tags(type, top):
+    """🏷️ List available technologies or categories."""
+    data = service.fetch_data()
+    counts = {}
+    field = 'tech_tags' if type == 'tech' else 'categories'
+    
+    for org in data:
+        for t in org.get(field, []):
+            counts[t] = counts.get(t, 0) + 1
+            
+    sorted_tags = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:top]
+    
+    title = "Popular Technologies" if type == 'tech' else "Popular Categories"
+    table = Table(title=f"{title} (Top {top})", box=None)
+    table.add_column("Tag Name", style="bold cyan")
+    table.add_column("Organizations", justify="right", style="green")
+    
+    for tag, count in sorted_tags:
+        table.add_row(tag, str(count))
+        
+    console.print(table)
+
+@cli.command()
+@click.argument('query')
+@click.option('--ideas', '-i', is_flag=True, help='Open the ideas list page.')
+@click.option('--guide', '-g', is_flag=True, help='Open the contributor guidance page.')
+@click.option('--source', '-s', is_flag=True, help='Open the source code repository.')
+def open(query, ideas, guide, source):
+    """🌐 Open organization links in your default web browser."""
+    data = service.fetch_data()
+    org = find_org(query, data)
+    
+    if not org:
+        console.print(f"[bold red]Error:[/bold red] Could not find organization for '{query}'.")
+        return
+
+    url = org.get('website_url')
+    if ideas: url = org.get('ideas_link')
+    elif guide: url = org.get('contributor_guidance_url')
+    elif source: url = org.get('source_code')
+    
+    if not url:
+        console.print(f"[bold red]Error:[/bold red] Requested link not found for {org['name']}.")
+        return
+        
+    console.print(f"[bold green]Opening:[/bold green] {url}")
+    webbrowser.open(url)
+
+@cli.command()
+@click.option('--tech', '-t', multiple=True, help='Filter by tech.')
+@click.option('--cat', '-c', multiple=True, help='Filter by category.')
+@click.option('--format', '-f', type=click.Choice(['json', 'csv']), default='json')
+@click.argument('output_file', type=click.Path())
+def export(tech, cat, format, output_file):
+    """📤 Export filtered organizations to JSON or CSV."""
+    data = service.fetch_data()
+    
+    # Filtering (same as list)
+    filtered = []
+    tech_set = {t.lower() for t in tech}
+    cat_set = {c.lower() for c in cat}
+
+    for org in data:
+        org_techs = {t.lower() for t in org.get('tech_tags', [])}
+        org_cats = {c.lower() for c in org.get('categories', [])}
+        if tech_set and not tech_set.issubset(org_techs): continue
+        if cat_set and not any(c in org_cats for c in cat_set): continue
+        filtered.append(org)
+
+    if format == 'json':
+        with open(output_file, 'w') as f:
+            json.dump(filtered, f, indent=4)
+    else:
+        if not filtered:
+            console.print("[yellow]No data to export.[/yellow]")
+            return
+        keys = filtered[0].keys()
+        with open(output_file, 'w', newline='') as f:
+            dict_writer = csv.DictWriter(f, fieldnames=keys)
+            dict_writer.writeheader()
+            dict_writer.writerows(filtered)
+            
+    console.print(f"[bold green]✔ Exported {len(filtered)} organizations to {output_file}[/bold green]")
 
 if __name__ == '__main__':
     cli()
