@@ -55,8 +55,18 @@ chmod +x gsoc-2026
 # Search for anything related to "machine learning"
 ./gsoc-2026 search "machine learning"
 
-# Get full details for an organization using its slug
+# Or search using a GitHub URL
+./gsoc-2026 search "https://github.com/foss42/apidash"
+
+# Get full details for an organization using its slug or URL
 ./gsoc-2026 info openmrs
+./gsoc-2026 info "https://github.com/foss42/apidash"
+```
+
+### 📥 Fast-track Contribution
+```bash
+# Clone an organization's repository directly from the tool
+./gsoc-2026 clone api-dash
 ```
 
 ### Insights

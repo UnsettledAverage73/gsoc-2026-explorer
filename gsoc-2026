@@ -20,6 +20,7 @@ from rich.prompt import Prompt, Confirm
 API_BASE = "https://summerofcode.withgoogle.com/api/program/2026/organizations/"
 CACHE_DIR = os.path.expanduser("~/.gsoc_explorer")
 CACHE_FILE = os.path.join(CACHE_DIR, "orgs_2026.json")
+LOCAL_CACHE = ".gsoc_cache.json"
 CACHE_TTL = 86400  # 24 hours
 
 console = Console()
@@ -32,12 +33,22 @@ class GSoCDataService:
 
     def fetch_data(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """Fetch organizations with smart caching."""
-        if not force_refresh and self._is_cache_valid():
-            try:
-                with open(CACHE_FILE, 'r') as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
+        if not force_refresh:
+            # Check for local cache first
+            if os.path.exists(LOCAL_CACHE):
+                try:
+                    with open(LOCAL_CACHE, 'r') as f:
+                        return json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    pass
+            
+            # Check for home directory cache
+            if self._is_cache_valid():
+                try:
+                    with open(CACHE_FILE, 'r') as f:
+                        return json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    pass
 
         return self._refresh_cache()
 
@@ -139,11 +150,13 @@ def list_orgs(tech, cat, limit, sort):
 @cli.command()
 @click.argument('query')
 def search(query):
-    """🔍 Deep search by name, tagline, or tech."""
+    """🔍 Deep search by name, tagline, tech, or URL."""
     data = service.fetch_data()
     query = query.lower()
     matches = [o for o in data if query in o['name'].lower() or 
                query in o.get('tagline', '').lower() or
+               query in o.get('website_url', '').lower() or
+               query in o.get('source_code', '').lower() or
                any(query in t.lower() for t in o.get('tech_tags', []))]
 
     if not matches:
@@ -158,14 +171,22 @@ def search(query):
         ))
 
 @cli.command()
-@click.argument('slug')
-def info(slug):
-    """ℹ️ Get the complete dossier for an organization."""
+@click.argument('query')
+def info(query):
+    """ℹ️ Get the complete dossier for an organization by slug or URL."""
     data = service.fetch_data()
-    org = next((o for o in data if o['slug'].lower() == slug.lower()), None)
+    
+    # Try finding by slug first
+    org = next((o for o in data if o['slug'].lower() == query.lower()), None)
+    
+    # If not found and it looks like a URL, search by website or source code
+    if not org and (query.startswith('http') or 'github.com' in query):
+        q = query.lower()
+        org = next((o for o in data if q in o.get('website_url', '').lower() or 
+                    q in o.get('source_code', '').lower()), None)
     
     if not org:
-        console.print(f"[bold red]Error:[/bold red] Slug '{slug}' not found.")
+        console.print(f"[bold red]Error:[/bold red] Could not find organization for '{query}'.")
         return
 
     # Header
@@ -213,6 +234,59 @@ def stats():
     
     console.print(table)
     console.print(f"\n[bold]Total Mentoring Organizations:[/bold] {len(data)}")
+
+@cli.command()
+@click.argument('query')
+@click.option('--dir', '-d', help='Directory to clone into.')
+def clone(query, dir):
+    """📥 Fast-track contribution: Clone an organization\'s repository."""
+    data = service.fetch_data()
+    
+    # Use the same logic as info to find the org
+    org = next((o for o in data if o['slug'].lower() == query.lower()), None)
+    if not org and (query.startswith('http') or 'github.com' in query):
+        q = query.lower()
+        org = next((o for o in data if q in o.get('website_url', '').lower() or 
+                    q in o.get('source_code', '').lower()), None)
+    
+    if not org:
+        console.print(f"[bold red]Error:[/bold red] Could not find organization for '{query}'.")
+        return
+
+    source_url = org.get('source_code')
+    if not source_url:
+        console.print(f"[bold red]Error:[/bold red] {org['name']} does not have a source code link.")
+        return
+
+    if "github.com" not in source_url:
+        console.print(f"[yellow]Warning:[/yellow] Source URL is not a GitHub link: [cyan]{source_url}[/cyan]")
+        if not Confirm.ask("Do you want to try cloning it anyway?"):
+            return
+
+    # Basic check to avoid cloning organization pages (like github.com/openmrs)
+    parts = source_url.rstrip('/').split('/')
+    if len(parts) <= 4 and "github.com" in source_url:
+        console.print(f"[bold yellow]Wait![/bold yellow] The source URL [cyan]{source_url}[/cyan] looks like an organization profile, not a repository.")
+        repo_suggestion = Prompt.ask("Please enter the specific repository URL or press Enter to skip", default="")
+        if repo_suggestion:
+            source_url = repo_suggestion
+        else:
+            return
+
+    console.print(f"[bold green]Cloning {org['name']}...[/bold green]")
+    target_dir = dir or org['slug']
+    cmd = f"git clone {source_url} {target_dir}"
+    
+    console.print(f"[dim]Running: {cmd}[/dim]")
+    ret = os.system(cmd)
+    
+    if ret == 0:
+        console.print(f"\n[bold green]✔ Successfully cloned {org['name']} into {target_dir}![/bold green]")
+        console.print(f"[bold cyan]Next Steps:[/bold cyan]")
+        console.print(f"1. cd {target_dir}")
+        console.print(f"2. Read the contribution guidelines: {org.get('contributor_guidance_url')}")
+    else:
+        console.print(f"[bold red]Clone failed.[/bold red]")
 
 if __name__ == '__main__':
     cli()
