@@ -8,6 +8,8 @@ import json
 import time
 import requests
 import click
+import subprocess
+import logging
 from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.table import Table
@@ -15,6 +17,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt, Confirm
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 # --- Constants & Configuration ---
 API_BASE = "https://summerofcode.withgoogle.com/api/program/2026/organizations/"
@@ -22,33 +26,57 @@ CACHE_DIR = os.path.expanduser("~/.gsoc_explorer")
 CACHE_FILE = os.path.join(CACHE_DIR, "orgs_2026.json")
 LOCAL_CACHE = ".gsoc_cache.json"
 CACHE_TTL = 86400  # 24 hours
+LOG_FILE = os.path.join(CACHE_DIR, "explorer.log")
+
+# Setup logging
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 console = Console()
 
 class GSoCDataService:
     def __init__(self, cache_ttl: int = CACHE_TTL):
         self.cache_ttl = cache_ttl
-        if not os.path.exists(CACHE_DIR):
-            os.makedirs(CACHE_DIR)
+        self.session = self._setup_session()
+
+    def _setup_session(self) -> requests.Session:
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     def fetch_data(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """Fetch organizations with smart caching."""
         if not force_refresh:
-            # Check for local cache first
+            # Check for local cache first (pre-bundled data)
             if os.path.exists(LOCAL_CACHE):
                 try:
                     with open(LOCAL_CACHE, 'r') as f:
+                        logging.info("Using local cache file.")
                         return json.load(f)
-                except (json.JSONDecodeError, IOError):
-                    pass
+                except (json.JSONDecodeError, IOError) as e:
+                    logging.error(f"Failed to read local cache: {e}")
             
             # Check for home directory cache
             if self._is_cache_valid():
                 try:
                     with open(CACHE_FILE, 'r') as f:
+                        logging.info("Using valid home directory cache.")
                         return json.load(f)
-                except (json.JSONDecodeError, IOError):
-                    pass
+                except (json.JSONDecodeError, IOError) as e:
+                    logging.error(f"Failed to read home cache: {e}")
 
         return self._refresh_cache()
 
@@ -65,24 +93,38 @@ class GSoCDataService:
         ) as progress:
             progress.add_task(description="Syncing GSoC 2026 Organizations...", total=None)
             try:
-                response = requests.get(API_BASE, timeout=15)
+                logging.info(f"Fetching data from {API_BASE}")
+                response = self.session.get(API_BASE, timeout=15)
                 response.raise_for_status()
                 data = response.json()
+                
+                # Robust validation: Ensure it's a list
+                if not isinstance(data, list):
+                    raise ValueError("API returned unexpected data format (not a list).")
+
                 with open(CACHE_FILE, 'w') as f:
                     json.dump(data, f)
+                
+                logging.info(f"Successfully synced {len(data)} organizations.")
                 return data
-            except requests.RequestException as e:
+            except (requests.RequestException, ValueError) as e:
+                logging.error(f"Sync Failed: {e}")
                 console.print(f"[bold red]Sync Failed:[/bold red] {e}")
-                if os.path.exists(CACHE_FILE):
-                    console.print("[yellow]Using stale cache for now...[/yellow]")
-                    with open(CACHE_FILE, 'r') as f:
-                        return json.load(f)
+                
+                # Fallback to any available cache
+                for path in [CACHE_FILE, LOCAL_CACHE]:
+                    if os.path.exists(path):
+                        console.print(f"[yellow]Using stale cache from {path} for now...[/yellow]")
+                        with open(path, 'r') as f:
+                            return json.load(f)
+                
+                console.print("[bold red]Critical Error:[/bold red] No local data available and network fetch failed.")
                 sys.exit(1)
 
 service = GSoCDataService()
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.version_option("2.0.0")
+@click.version_option("2.1.0")
 def cli():
     """🚀 GSoC 2026 Explorer: Find your perfect mentoring organization.
     
@@ -97,6 +139,31 @@ def sync(force):
     """🔄 Sync local database with the latest GSoC data."""
     service.fetch_data(force_refresh=True)
     console.print("[bold green]✔ Successfully synced latest GSoC 2026 organizations![/bold green]")
+
+@cli.command()
+def doctor():
+    """🩺 Check environment and dependencies for health."""
+    console.print("[bold cyan]Running System Health Check...[/bold cyan]\n")
+    
+    checks = [
+        ("Python Version", sys.version.split()[0]),
+        ("Cache Directory", CACHE_DIR),
+        ("Local Cache File", "Exists" if os.path.exists(LOCAL_CACHE) else "Missing"),
+        ("Home Cache File", "Exists" if os.path.exists(CACHE_FILE) else "Missing"),
+        ("Log File", LOG_FILE),
+    ]
+    
+    table = Table(show_header=False, box=None)
+    for label, status in checks:
+        table.add_row(f"[bold]{label}:[/bold]", status)
+    console.print(table)
+    
+    # Check git
+    try:
+        git_ver = subprocess.check_output(["git", "--version"]).decode().strip()
+        console.print(f"\n[green]✔ {git_ver} found.[/green]")
+    except Exception:
+        console.print("\n[red]✘ Git not found. 'clone' command will not work.[/red]")
 
 @cli.command(name="list")
 @click.option('--tech', '-t', multiple=True, help='Filter by technology (multiple allowed).')
@@ -263,10 +330,10 @@ def clone(query, dir):
         if not Confirm.ask("Do you want to try cloning it anyway?"):
             return
 
-    # Basic check to avoid cloning organization pages (like github.com/openmrs)
+    # Robust repository detection
     parts = source_url.rstrip('/').split('/')
     if len(parts) <= 4 and "github.com" in source_url:
-        console.print(f"[bold yellow]Wait![/bold yellow] The source URL [cyan]{source_url}[/cyan] looks like an organization profile, not a repository.")
+        console.print(f"[bold yellow]Wait![/bold yellow] The source URL [cyan]{source_url}[/cyan] looks like an organization profile, not a specific repository.")
         repo_suggestion = Prompt.ask("Please enter the specific repository URL or press Enter to skip", default="")
         if repo_suggestion:
             source_url = repo_suggestion
@@ -275,18 +342,19 @@ def clone(query, dir):
 
     console.print(f"[bold green]Cloning {org['name']}...[/bold green]")
     target_dir = dir or org['slug']
-    cmd = f"git clone {source_url} {target_dir}"
     
-    console.print(f"[dim]Running: {cmd}[/dim]")
-    ret = os.system(cmd)
-    
-    if ret == 0:
+    try:
+        logging.info(f"Attempting to clone {source_url} into {target_dir}")
+        subprocess.run(["git", "clone", source_url, target_dir], check=True)
         console.print(f"\n[bold green]✔ Successfully cloned {org['name']} into {target_dir}![/bold green]")
         console.print(f"[bold cyan]Next Steps:[/bold cyan]")
         console.print(f"1. cd {target_dir}")
         console.print(f"2. Read the contribution guidelines: {org.get('contributor_guidance_url')}")
-    else:
-        console.print(f"[bold red]Clone failed.[/bold red]")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Clone failed for {source_url}: {e}")
+        console.print(f"[bold red]Clone failed with exit code {e.returncode}.[/bold red]")
+    except FileNotFoundError:
+        console.print("[bold red]Error:[/bold red] 'git' command not found. Please install git.")
 
 if __name__ == '__main__':
     cli()
